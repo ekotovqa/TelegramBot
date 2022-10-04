@@ -1,4 +1,5 @@
-﻿using Telegram.Bot;
+﻿using System.Text.RegularExpressions;
+using Telegram.Bot;
 using Telegram.Bot.Types;
 using Сurrency.API;
 
@@ -6,21 +7,25 @@ namespace TelegramBot.API
 {
     public class CurrencyRateTelegramBot
     {
-        private TelegramBotClient _client  { get; set; }
-        private string Token { get; set; }
-        private string _startMessage = "Добро пожаловать в CurrencyRateBot, для начала работы введите дату на которую вы хотите получить информацию в формате дд/мм/гггг";
-        private string _retryMessage = "Для продолжения работы введите дату на которую вы хотите получить информацию в формате дд/мм/гггг";
-        private string SelectedDate { get; set; } = null;
-        private List<string> AvailableCurrencies { get; set; } = new List<string>();
+        private TelegramBotClient _client;
+        private string _token;
+        private string _startMessage = "Добро пожаловать в CurrencyRateBot, для начала работы введите код валюты и дату на которую вы хотите получить информацию, в формате:\nUSD 26.08.2021";
+        private string _instructionMessage = "Для продолжения работы введите код валюты и дату на которую вы хотите получить информацию, в формате:\nUSD 26.08.2021";
+        private string _futureDateErrorMessage = $"Дата не может быть больше текущей";
+        private string _inputErrorMessage = $"Введен некорректный запрос";
+        private string _networkErrorMessage = $"Произошла сетевая ошибка, пожалуйста повторите запрос";
+        private string _emptyDataMessage = $"Нет данных на запрашиваемую дату";
+        private string _currencyCodeErrorMessage = $"Нет данных для указанной валюты или введен неверный код валюты";
+
         public CurrencyRateTelegramBot(string token)
         {
             if (string.IsNullOrEmpty(token)) throw new Exception("Invalid initial data");
-            Token = token;          
+            _token = token;          
         }
 
         public void Start()
         {
-            _client = new TelegramBotClient(Token);
+            _client = new TelegramBotClient(_token);
             _client.StartReceiving(Update, Error);
         }
 
@@ -33,68 +38,105 @@ namespace TelegramBot.API
         {
             var message = update.Message;
 
-            if (message.Text.ToLower() == "/start")
+            if(message != null)
             {
-                await botClient.SendTextMessageAsync(message.Chat, _startMessage);
-                return;
-            }
-
-            if (DateTime.TryParse(message.Text, out DateTime dateTime)) 
-            {
-                if(dateTime > DateTime.Now)
+                if (message.Text.ToLower() == "/start")
                 {
-                    await botClient.SendTextMessageAsync(message.Chat, $"Дата не может быть больше текущей.\n{_retryMessage}");
+                    await SendStartMessage(botClient, message);
                     return;
                 }
-                SelectedDate = message.Text;
-                AvailableCurrencies =  await CurrencyRate.GetListAvailableCurrencies(SelectedDate);
-                if(AvailableCurrencies.Count == 0)
-                {
-                    await botClient.SendTextMessageAsync(message.Chat, $"Для выбранной вами даты, данные не доступны.\n{_retryMessage}");
-                    return;
-                }
-                AvailableCurrencies.RemoveAll(d => d == null);
-                string responseMessage = "Выберите интересующую вас валюту: ";
-                foreach (var currency in AvailableCurrencies)
-                {
-                    responseMessage += $"{currency}, ";
-                }
-                responseMessage = responseMessage.Remove(responseMessage.Length - 2, 2);
-                await botClient.SendTextMessageAsync(message.Chat, responseMessage);
-                return;
-            }
 
-
-            if (AvailableCurrencies.Exists(d => d.Contains(message.Text.ToUpper())))
-            {
-                var selectedCurrency = message.Text.ToUpper();
-                var currencyRate = new CurrencyRate(SelectedDate, selectedCurrency);
-                var exchangeRate = await currencyRate.GetExchangeRateAsync();
-                string exchangeRateMessage = $"Курс UAH к {selectedCurrency} на {SelectedDate}\n" +
-                    $"Покупка ПБ: {exchangeRate.PurchaseRate} \nПродажа ПБ: {exchangeRate.SaleRate}\n" +
-                    $"Покупка НБУ: {exchangeRate.PurchaseRateNB} \nПродажа НБУ: {exchangeRate.SaleRateNB}";
-                await botClient.SendTextMessageAsync(message.Chat, exchangeRateMessage);
-                SelectedDate = null;
-                AvailableCurrencies = new List<string>();
-                return;
-            }
-            else if(AvailableCurrencies.Count > 0)
-            {
-                string responseMessage = "Выберите интересующую вас валюту из списка: ";
-                foreach (var currency in AvailableCurrencies)
+                if (message.Text.Split().Count() == 2)
                 {
-                    responseMessage += $"{currency}, ";
-                }
-                responseMessage = responseMessage.Remove(responseMessage.Length - 2, 2);
-                await botClient.SendTextMessageAsync(message.Chat, responseMessage);
-                return;
-            }
+                    var enteredCurrencyCode = message.Text.Split()[0];
+                    var enteredDate = message.Text.Split()[1];
 
-            if (message.Text.ToLower() != "/start")
-            {
-                await botClient.SendTextMessageAsync(message.Chat, _retryMessage);
-                return;
+                    if (Regex.IsMatch(enteredCurrencyCode, "^[A-Z]{3}$") && DateTime.TryParse(enteredDate, out DateTime date))
+                    {
+                        if (date > DateTime.Now)
+                        {
+                            await SendDateErrorMessage(botClient, message);
+                            await SendInstructionMessage(botClient, message);
+                            return;
+                        }
+
+                        var exchangeRates = await new CurrencyRate(date).GetExchangeRateAsync();
+
+                        if (exchangeRates == null)
+                        {
+                            await SendNetworkErrorMessage(botClient, message);
+                            await SendInstructionMessage(botClient, message);
+                            return;
+                        }
+
+                        if (exchangeRates.Count == 0)
+                        {
+                            await SendEmptyDataMessage(botClient, message);
+                            await SendInstructionMessage(botClient, message);
+                            return;
+                        }
+
+                        if (exchangeRates.Exists(d => d.Currency.Contains(enteredCurrencyCode)))
+                        {
+                            await SendCurrencyRateMessage(botClient, message, enteredCurrencyCode, enteredDate, exchangeRates);
+                            return;
+                        }
+                        else
+                        {
+                            await SendСurrencyCodeErrorMessage(botClient, message);
+                            await SendInstructionMessage(botClient, message);
+                            return;
+                        }
+                    }
+                }
+
+                await SendInputErrorMessage(botClient, message);
+                await SendInstructionMessage(botClient, message);
             }
+        }
+
+        private static async Task SendCurrencyRateMessage(ITelegramBotClient botClient, Message? message, string enteredCurrencyCode, string enteredDate, List<ExchangeRate> exchangeRates)
+        {
+            var exchangeRate = exchangeRates.FirstOrDefault(d => d.Currency == enteredCurrencyCode);
+            string exchangeRateMessage = $"Курс {enteredCurrencyCode} к UAH на {enteredDate}\n" +
+            $"Покупка ПБ: {exchangeRate.PurchaseRate} \nПродажа ПБ: {exchangeRate.SaleRate}\n" +
+            $"Покупка НБУ: {exchangeRate.PurchaseRateNB} \nПродажа НБУ: {exchangeRate.SaleRateNB}";
+            await botClient.SendTextMessageAsync(message.Chat, exchangeRateMessage);
+        }
+
+        private async Task SendInputErrorMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _inputErrorMessage);
+        }
+
+        private async Task SendInstructionMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _instructionMessage);
+        }
+
+        private async Task SendDateErrorMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _futureDateErrorMessage);
+        }
+
+        private async Task SendStartMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _startMessage);
+        }
+
+        private async Task SendNetworkErrorMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _networkErrorMessage);
+        }
+
+        private async Task SendEmptyDataMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _emptyDataMessage);
+        }
+
+        private async Task SendСurrencyCodeErrorMessage(ITelegramBotClient botClient, Message? message)
+        {
+            await botClient.SendTextMessageAsync(message.Chat, _currencyCodeErrorMessage);
         }
     }
 }

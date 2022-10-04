@@ -1,71 +1,41 @@
 ﻿using System.Text.Json;
+using Serilog;
 
 namespace Сurrency.API
 {
     public class CurrencyRate
     {
-        private static readonly HttpClient _client;
-
-        public string Date { get; set; }
-        public string Currency { get; set; }
-
-        public CurrencyRate(string date, string currency)
+        private static readonly HttpClient _client = new HttpClient
         {
-            if (string.IsNullOrEmpty(date) || string.IsNullOrEmpty(currency)) throw new Exception("Invalid initial data");
+            BaseAddress = new Uri($"https://api.privatbank.ua")
+        };
+        public DateTime Date { get; set; }
+        private const string _url = $"/p24api/exchange_rates?json&dat=";
+        private const string _errorLogPath = "log.txt";
+        private static Serilog.Core.Logger _logger = new LoggerConfiguration().WriteTo.File(_errorLogPath).CreateLogger();
+
+        public CurrencyRate(DateTime date)
+        {
             Date = date;
-            Currency = currency;
         }
 
-        static CurrencyRate()
+        public async Task<List<ExchangeRate>> GetExchangeRateAsync()
         {
-            _client = new HttpClient()
-            {
-                BaseAddress = new Uri($"https://api.privatbank.ua")
-            };
-        }
-
-        public async Task<ExchangeRate> GetExchangeRateAsync()
-        {
-            var url = $"/p24api/exchange_rates?json&date={Date}";
-            var result = new ExchangeRate();
-            using (var response = await _client.GetAsync(url))
+            var result = new List<ExchangeRate>();
+            using (var response = await _client.GetAsync(_url + Date))
                 if (response.IsSuccessStatusCode)
                 {
                     var stringResponse = await response.Content.ReadAsStringAsync();
-                    var rawResult = JsonSerializer.Deserialize<BankCurrencyExchangeRateDataModel>(stringResponse);
-                    foreach (var exchangeRate in rawResult.ExchangeRate)
-                    {
-                        if (exchangeRate.Currency == Currency) return exchangeRate;
-                    }
+                    result = JsonSerializer.Deserialize<BankCurrencyExchangeRateDataModel>(stringResponse).ExchangeRate;
+                    result.RemoveAll(d => d == null);
+                    result.RemoveAll(d => d.Currency == null);
+                    return result;
                 }
                 else
                 {
-                    await File.AppendAllTextAsync("log.txt", $"{DateTime.Now} {response.ReasonPhrase}");
+                    _logger.Error(response.ToString());
                     return null;
                 }
-            return result;
-        }
-
-        public static async Task<List<string>> GetListAvailableCurrencies(string date)
-        {
-            var url = $"/p24api/exchange_rates?json&date={date}";
-            var result = new List<string>();
-            using (var response = await _client.GetAsync(url))
-                if (response.IsSuccessStatusCode)
-                {
-                    var stringResponse = await response.Content.ReadAsStringAsync();
-                    var rawResult = JsonSerializer.Deserialize<BankCurrencyExchangeRateDataModel>(stringResponse);
-                    foreach (var exchangeRate in rawResult.ExchangeRate)
-                    {
-                        result.Add(exchangeRate.Currency);
-                    }
-                }
-                else
-                {
-                    await File.AppendAllTextAsync("log.txt", $"{DateTime.Now} {response.ReasonPhrase}");
-                    return null;
-                }
-            return result;
         }
     }
 }

@@ -1,5 +1,6 @@
 ﻿using TelegramBot.API;
+using System.Configuration;
 
-CurrencyRateTelegramBot telegramBot = new CurrencyRateTelegramBot("1283451876:AAEeKuY3hjz3_GkEc_Oty3a6VoOSxt9ZR5o");
+CurrencyRateTelegramBot telegramBot = new CurrencyRateTelegramBot(ConfigurationManager.AppSettings["token"]);
 telegramBot.Start();
 Console.ReadLine();
