@@ -10,7 +10,7 @@ namespace Сurrency.API
             BaseAddress = new Uri($"https://api.privatbank.ua")
         };
         public DateTime Date { get; set; }
-        private const string _url = $"/p24api/exchange_rates?json&dat=";
+        private const string _url = $"/p24api/exchange_rates?json&date=";
         private const string _errorLogPath = "log.txt";
         private static Serilog.Core.Logger _logger = new LoggerConfiguration().WriteTo.File(_errorLogPath).CreateLogger();
 
